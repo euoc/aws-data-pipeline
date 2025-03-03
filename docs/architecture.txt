@@ -2,7 +2,7 @@ AWS Data Processing Pipeline Architecture
 
 ┌─────────────┐     ┌───────────────────┐     ┌────────────────┐
 │             │     │                   │     │                │
-│  S3 Bucket  │────▶│  ECS with Fargate │────▶│  RDS Postgres  │
+│  S3 Bucket  │────▶│  Lambda Function  │────▶│  RDS Postgres  │
 │             │     │                   │     │                │
 └─────────────┘     └───────────────────┘     └────────────────┘
        │                      │                       │
@@ -30,11 +30,12 @@ Components Description:
    - Encrypted, versioned storage
    - Restricted access via IAM policies
 
-2. Amazon ECS with Fargate:
-   - Runs containerized Python application
-   - Automatically scales based on workload
+2. AWS Lambda Function:
+   - Runs serverless Python application
+   - Automatically triggered by S3 events
    - Pulls data from S3, processes it, and writes to RDS
    - Runs in private subnet with NAT gateway access
+   - Scales automatically with no infrastructure management
 
 3. Amazon RDS PostgreSQL:
    - Stores processed data in relational tables
@@ -44,7 +45,7 @@ Components Description:
 
 4. Amazon VPC:
    - Public subnet: NAT gateway, Internet Gateway
-   - Private subnet: ECS Fargate tasks
+   - Private subnet: Lambda function
    - Isolated subnet: RDS PostgreSQL instance
 
 5. Security Components:
@@ -55,7 +56,7 @@ Components Description:
 
 Data Flow:
 1. CSV files uploaded to S3 bucket
-2. ECS Fargate container processes files:
+2. Lambda function processes files:
    - Reads from S3
    - Transforms data with Python/pandas
    - Loads data to PostgreSQL

@@ -2,12 +2,11 @@ import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as ecs from 'aws-cdk-lib/aws-ecs';
-import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as rds from 'aws-cdk-lib/aws-rds';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as path from 'path';
-import * as assets from 'aws-cdk-lib/aws-ecr-assets';
 
 export class CdkAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -74,29 +73,32 @@ export class CdkAppStack extends cdk.Stack {
       backupRetention: cdk.Duration.days(7),
     });
 
-    // ECS Cluster
-    const cluster = new ecs.Cluster(this, 'DataProcessingCluster', {
+    // Security group for Lambda function
+    const lambdaSecurityGroup = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
       vpc,
+      description: 'Security group for Lambda function',
+      allowAllOutbound: true,
     });
 
-    // Docker image for the container
-    const dockerImage = new assets.DockerImageAsset(this, 'DataProcessorImage', {
-      directory: path.join(__dirname, '../../app'),
-    });
+    // Allow Lambda security group to connect to the database
+    dbSecurityGroup.addIngressRule(
+      lambdaSecurityGroup,
+      ec2.Port.tcp(5432),
+      'Allow Lambda function to connect to RDS'
+    );
 
-    // Task Definition with IAM Role
-    const taskDefinition = new ecs.FargateTaskDefinition(this, 'DataProcessorTask', {
-      memoryLimitMiB: 512,
-      cpu: 256,
-    });
-
-    // Grant the task IAM role read access to the S3 bucket
-    dataBucket.grantRead(taskDefinition.taskRole);
-
-    // Add the container to the task with environment variables
-    const container = taskDefinition.addContainer('DataProcessorContainer', {
-      image: ecs.ContainerImage.fromDockerImageAsset(dockerImage),
-      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'data-processor' }),
+    // Lambda function for data processing
+    const dataProcessorLambda = new lambda.Function(this, 'DataProcessorFunction', {
+      runtime: lambda.Runtime.PYTHON_3_9,
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../app/src')),
+      handler: 'lambda_handler.handler',
+      vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
+      securityGroups: [lambdaSecurityGroup],
+      timeout: cdk.Duration.minutes(5),
+      memorySize: 512,
       environment: {
         'S3_BUCKET': dataBucket.bucketName,
         'S3_PREFIX': 'data/',
@@ -105,25 +107,19 @@ export class CdkAppStack extends cdk.Stack {
         'DB_NAME': 'datapipeline',
         'DB_USER': 'postgres',
       },
-      secrets: {
-        // Get DB password from the secret created by RDS
-        'DB_PASSWORD': ecs.Secret.fromSecretsManager(dbInstance.secret!, 'password'),
-      },
     });
 
-    // Allow container security group to access the database
-    const ecsSecurityGroup = new ec2.SecurityGroup(this, 'ECSSecurityGroup', {
-      vpc,
-      description: 'Security group for ECS tasks',
-      allowAllOutbound: true,
-    });
+    // Grant Lambda function access to the RDS secret
+    dbInstance.secret!.grantRead(dataProcessorLambda);
 
-    // Allow ECS security group to connect to the database
-    dbSecurityGroup.addIngressRule(
-      ecsSecurityGroup,
-      ec2.Port.tcp(5432),
-      'Allow ECS tasks to connect to RDS'
-    );
+    // Grant Lambda function read access to the S3 bucket
+    dataBucket.grantRead(dataProcessorLambda);
+
+    // Add S3 event notification to trigger Lambda when a file is uploaded
+    dataProcessorLambda.addEventSource(new lambdaEventSources.S3EventSource(dataBucket, {
+      events: [s3.EventType.OBJECT_CREATED],
+      filters: [{ prefix: 'data/' }]
+    }));
 
     // Output the S3 bucket name and database endpoint for reference
     new cdk.CfnOutput(this, 'S3BucketName', {
@@ -139,6 +135,11 @@ export class CdkAppStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DBSecretName', {
       value: dbInstance.secret!.secretName,
       description: 'The name of the secret containing database credentials',
+    });
+
+    new cdk.CfnOutput(this, 'LambdaFunctionName', {
+      value: dataProcessorLambda.functionName,
+      description: 'The name of the Lambda function for data processing',
     });
   }
 }
