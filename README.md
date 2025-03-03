@@ -52,7 +52,7 @@ aws-data-pipeline/
 - AWS CLI configured with appropriate credentials
 - Node.js 14.x or later
 - npm or yarn
-- Docker (optional - only needed for local testing)
+- Docker (required for building and deploying the container image)
 
 ### AWS Configuration Setup
 
