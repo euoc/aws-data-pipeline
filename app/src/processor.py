@@ -54,28 +54,93 @@ def process_csv_file(s3_client, bucket, key):
         raise
 
 def save_to_postgres(df, table_name, conn):
-    """Save DataFrame data to PostgreSQL table."""
+    """
+    Save DataFrame data to PostgreSQL table using UPSERT pattern.
+    Will update existing records if they have the same natural key.
+    """
     try:
+        # Add a processing timestamp
+        df['processed_at'] = pd.Timestamp.now().isoformat()
+        
         # Create a cursor
         cur = conn.cursor()
         
-        # Create table if it doesn't exist (simplified example)
-        # In production, you would define a more specific schema
-        columns = ', '.join([f'"{col}" TEXT' for col in df.columns])
-        create_table_query = f'CREATE TABLE IF NOT EXISTS {table_name} (id SERIAL PRIMARY KEY, {columns})'
+        # Identify natural key columns (assuming 'id' as primary if present)
+        natural_key_cols = ['id'] if 'id' in df.columns else []
+        
+        # If no natural ID found and email exists, use that as a natural key
+        if not natural_key_cols and 'email' in df.columns:
+            natural_key_cols = ['email']
+        
+        # Create table if it doesn't exist with appropriate column types
+        column_definitions = []
+        for col in df.columns:
+            if pd.api.types.is_numeric_dtype(df[col]):
+                col_type = "NUMERIC"
+            elif pd.api.types.is_datetime64_dtype(df[col]):
+                col_type = "TIMESTAMP"
+            else:
+                col_type = "TEXT"
+            column_definitions.append(f'"{col}" {col_type}')
+        
+        # Add serial primary key if no natural key is found
+        table_columns = ', '.join(column_definitions)
+        if not natural_key_cols:
+            create_table_query = f'CREATE TABLE IF NOT EXISTS {table_name} (record_id SERIAL PRIMARY KEY, {table_columns})'
+        else:
+            create_table_query = f'CREATE TABLE IF NOT EXISTS {table_name} ({table_columns})'
+            
+            # Add unique constraint for natural keys if they don't exist
+            for col in natural_key_cols:
+                # Check if constraint exists
+                check_constraint_query = f"""
+                SELECT constraint_name 
+                FROM information_schema.table_constraints 
+                WHERE table_name = '{table_name}' 
+                AND constraint_type = 'UNIQUE' 
+                AND constraint_name = '{table_name}_{col}_key'
+                """
+                cur.execute(check_constraint_query)
+                if not cur.fetchone():
+                    # Add unique constraint if it doesn't exist
+                    add_constraint_query = f'ALTER TABLE {table_name} ADD CONSTRAINT {table_name}_{col}_key UNIQUE ("{col}")'
+                    try:
+                        cur.execute(add_constraint_query)
+                    except Exception as e:
+                        logger.warning(f"Could not add unique constraint: {e}")
+                        # Continue anyway
+        
         cur.execute(create_table_query)
         
-        # Insert data
+        # Insert data with ON CONFLICT handling
         for _, row in df.iterrows():
-            # Escape values and create placeholders
             placeholders = ', '.join(['%s'] * len(row))
             columns = ', '.join([f'"{col}"' for col in df.columns])
-            insert_query = f'INSERT INTO {table_name} ({columns}) VALUES ({placeholders})'
+            
+            if natural_key_cols:
+                # Create the update part
+                update_set = ', '.join([f'"{col}" = EXCLUDED."{col}"' for col in df.columns 
+                                      if col not in natural_key_cols])
+                
+                # Create the conflict target
+                conflict_cols = ', '.join([f'"{col}"' for col in natural_key_cols])
+                
+                # UPSERT query
+                insert_query = f'''
+                    INSERT INTO {table_name} ({columns})
+                    VALUES ({placeholders})
+                    ON CONFLICT ({conflict_cols}) DO UPDATE 
+                    SET {update_set}
+                '''
+            else:
+                # Simple insert if no natural key
+                insert_query = f'INSERT INTO {table_name} ({columns}) VALUES ({placeholders})'
+            
             cur.execute(insert_query, tuple(row))
         
         # Commit the transaction
         conn.commit()
-        logger.info(f"Successfully saved {len(df)} rows to table {table_name}")
+        logger.info(f"Successfully saved {len(df)} rows to table {table_name} using upsert pattern")
     except Exception as e:
         conn.rollback()
         logger.error(f"Error saving data to PostgreSQL: {e}")
