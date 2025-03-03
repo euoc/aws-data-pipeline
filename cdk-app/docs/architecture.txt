@@ -1,0 +1,62 @@
+AWS Data Processing Pipeline Architecture
+
+┌─────────────┐     ┌───────────────────┐     ┌────────────────┐
+│             │     │                   │     │                │
+│  S3 Bucket  │────▶│  ECS with Fargate │────▶│  RDS Postgres  │
+│             │     │                   │     │                │
+└─────────────┘     └───────────────────┘     └────────────────┘
+       │                      │                       │
+       │                      │                       │
+       ▼                      ▼                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│                                                             │
+│                    Amazon VPC with                          │
+│              Public, Private and Isolated Subnets           │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│                                                             │
+│             IAM Roles and Security Groups                   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+
+
+Components Description:
+
+1. Amazon S3 Bucket:
+   - Stores input CSV files
+   - Encrypted, versioned storage
+   - Restricted access via IAM policies
+
+2. Amazon ECS with Fargate:
+   - Runs containerized Python application
+   - Automatically scales based on workload
+   - Pulls data from S3, processes it, and writes to RDS
+   - Runs in private subnet with NAT gateway access
+
+3. Amazon RDS PostgreSQL:
+   - Stores processed data in relational tables
+   - Encrypted storage
+   - Located in isolated subnet
+   - Credentials stored in AWS Secrets Manager
+
+4. Amazon VPC:
+   - Public subnet: NAT gateway, Internet Gateway
+   - Private subnet: ECS Fargate tasks
+   - Isolated subnet: RDS PostgreSQL instance
+
+5. Security Components:
+   - IAM roles with least privilege access
+   - Security groups restricting traffic
+   - S3 bucket policy blocking public access
+   - Encryption in transit and at rest
+
+Data Flow:
+1. CSV files uploaded to S3 bucket
+2. ECS Fargate container processes files:
+   - Reads from S3
+   - Transforms data with Python/pandas
+   - Loads data to PostgreSQL
+3. Data stored securely in PostgreSQL for analytics and reporting
