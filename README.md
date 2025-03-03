@@ -7,7 +7,7 @@ This project implements a serverless data processing pipeline using AWS free tie
 The solution uses the following AWS services:
 
 - **Amazon S3**: Source data storage
-- **Amazon ECS with Fargate**: Container orchestration for the processing application
+- **AWS Lambda**: Serverless function for data processing
 - **Amazon RDS PostgreSQL**: Destination database
 - **AWS Secrets Manager**: Secure storage of database credentials
 - **Amazon VPC**: Network isolation for the resources
@@ -42,7 +42,7 @@ aws-data-pipeline/
 - **Serverless Architecture**: Uses AWS services that scale automatically
 - **Infrastructure as Code**: Entire infrastructure defined with AWS CDK
 - **Security Best Practices**: Follows AWS security recommendations
-- **Containerized Application**: Python-based data processor in Docker
+- **Serverless Processing**: Python-based data processor using AWS Lambda
 - **Testing**: Includes unit tests for both infrastructure and application code
 
 ## Getting Started
@@ -52,7 +52,7 @@ aws-data-pipeline/
 - AWS CLI configured with appropriate credentials
 - Node.js 14.x or later
 - npm or yarn
-- Docker (required for building and deploying the container image)
+- Python 3.9 (for local testing)
 
 ### AWS Configuration Setup
 
@@ -108,22 +108,35 @@ aws-data-pipeline/
 
 1. Note the outputs from the deployment (S3 bucket name, database endpoint)
 
-2. Upload sample CSV files to the created S3 bucket:
+2. Upload sample CSV files to the "data/" folder in the S3 bucket. The Lambda function is triggered by S3 "ObjectCreated" events for files in this prefix:
    ```bash
+   # Upload a new file
    aws s3 cp cdk-app/samples/data.csv s3://your-bucket-name/data/ --profile your-profile-name
+   
+   # Or update an existing file (will also trigger the Lambda)
+   aws s3 cp cdk-app/samples/data.csv s3://your-bucket-name/data/data.csv --profile your-profile-name
    ```
 
-3. Run the ECS task manually (since automatic triggering isn't implemented):
+3. The Lambda function will automatically process new files when they're uploaded to S3. Note that:
+   - Files must be in the "data/" prefix to trigger the function
+   - Each file upload (new or overwrite) triggers a separate Lambda execution
+   - The filename (without extension) is used as the database table name
+   - Data is intelligently merged using PostgreSQL's UPSERT functionality
+   - Duplicate records (with the same ID or email) will be updated, not duplicated
+
+   You can monitor Lambda executions:
    ```bash
-   # Get the task definition ARN
-   aws ecs list-task-definitions --family-prefix DataProcessorTask --query 'taskDefinitionArns[0]' --output text --profile your-profile-name
-   
-   # Run the task (you'll need subnet and security group IDs)
-   aws ecs run-task \
-     --cluster DataProcessingCluster \
-     --task-definition TASK_DEFINITION_ARN \
-     --launch-type FARGATE \
-     --network-configuration "awsvpcConfiguration={subnets=[PRIVATE_SUBNET_ID],securityGroups=[ECS_SECURITY_GROUP_ID]}" \
+   # Get the Lambda function logs
+   aws logs get-log-events \
+     --log-group-name /aws/lambda/DataPipelineStack-DataProcessorFunction \
+     --log-stream-name $(aws logs describe-log-streams \
+       --log-group-name /aws/lambda/DataPipelineStack-DataProcessorFunction \
+       --order-by LastEventTime \
+       --descending \
+       --limit 1 \
+       --query 'logStreams[0].logStreamName' \
+       --output text \
+       --profile your-profile-name) \
      --profile your-profile-name
    ```
 
