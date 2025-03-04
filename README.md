@@ -153,6 +153,7 @@ aws-data-pipeline/
    
    # Connect to the bastion host
    ssh -i bastion-key.pem ec2-user@BASTION_PUBLIC_DNS
+   Or you can use EC2 Instance Connect in the AWS Console
    
    # Once connected to the bastion, use the pre-configured alias to connect to the database
    connect-db
