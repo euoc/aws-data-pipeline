@@ -26,12 +26,36 @@ def get_s3_client():
 def get_db_connection():
     """Create a connection to the PostgreSQL database."""
     try:
+        # Get the database password from AWS Secrets Manager if not provided as environment variable
+        password = DB_PASSWORD
+        if not password:
+            logger.info("No password provided in environment variables, retrieving from Secrets Manager")
+            secret_name = os.environ.get('DB_SECRET_NAME')
+            if not secret_name:
+                raise ValueError("Neither DB_PASSWORD nor DB_SECRET_NAME environment variable is set")
+            
+            # Get the secret
+            secretsmanager = boto3.client('secretsmanager')
+            secret_response = secretsmanager.get_secret_value(SecretId=secret_name)
+            secret = secret_response.get('SecretString')
+            
+            # Parse the secret JSON
+            import json
+            secret_dict = json.loads(secret)
+            password = secret_dict.get('password')
+            
+            if not password:
+                raise ValueError("Could not retrieve password from secret")
+            
+            logger.info("Successfully retrieved database password from Secrets Manager")
+        
+        # Connect to the database
         conn = psycopg2.connect(
             host=DB_HOST,
             port=DB_PORT,
             dbname=DB_NAME,
             user=DB_USER,
-            password=DB_PASSWORD
+            password=password
         )
         return conn
     except Exception as e:

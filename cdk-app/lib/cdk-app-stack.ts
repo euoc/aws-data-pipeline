@@ -106,6 +106,7 @@ export class CdkAppStack extends cdk.Stack {
         'DB_PORT': dbInstance.dbInstanceEndpointPort,
         'DB_NAME': 'datapipeline',
         'DB_USER': 'postgres',
+        'DB_SECRET_NAME': dbInstance.secret?.secretName || '',
       },
     });
 
