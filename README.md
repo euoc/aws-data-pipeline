@@ -1,6 +1,6 @@
 # AWS Data Processing Pipeline
 
-This project implements a serverless data processing pipeline using AWS free tier services. The pipeline ingests data from an S3 bucket, processes it using a containerized application, and stores the results in an RDS PostgreSQL database.
+This project implements a serverless data processing pipeline using AWS free tier services. The pipeline ingests data from an S3 bucket, processes it using a containerized Lambda function, and stores the results in an RDS PostgreSQL database.
 
 ## Architecture
 
@@ -42,7 +42,7 @@ aws-data-pipeline/
 - **Serverless Architecture**: Uses AWS services that scale automatically
 - **Infrastructure as Code**: Entire infrastructure defined with AWS CDK
 - **Security Best Practices**: Follows AWS security recommendations
-- **Serverless Processing**: Python-based data processor using AWS Lambda
+- **Containerized Processing**: Python-based data processor using AWS Lambda with Docker container
 - **Testing**: Includes unit tests for both infrastructure and application code
 
 ## Getting Started
@@ -53,6 +53,7 @@ aws-data-pipeline/
 - Node.js 14.x or later
 - npm or yarn
 - Python 3.9 (for local testing)
+- Docker installed and running (required for container builds during deployment)
 
 ### AWS Configuration Setup
 
@@ -115,14 +116,20 @@ aws-data-pipeline/
    aws s3 cp cdk-app/samples/data.csv s3://your-bucket-name/data/data.csv --profile your-profile-name
    ```
 
-3. The Lambda function will automatically process new files when they're uploaded to S3. Note that:
+3. Upload a CSV file to test the pipeline:
+   ```bash
+   # Upload the sample data file to S3 to trigger the Lambda function
+   aws s3 cp cdk-app/samples/data.csv s3://your-bucket-name/data/ --profile your-profile-name
+   ```
+
+   The Lambda function will automatically process files when they're uploaded to S3. Note that:
    - Files must be in the "data/" prefix to trigger the function
    - Each file upload (new or overwrite) triggers a separate Lambda execution
    - The filename (without extension) is used as the database table name
    - Data is intelligently merged using PostgreSQL's UPSERT functionality
    - Duplicate records (with the same ID or email) will be updated, not duplicated
 
-   You can monitor Lambda executions:
+4. You can monitor Lambda executions:
    ```bash
    # Get the Lambda function logs
    aws logs get-log-events \
@@ -137,19 +144,26 @@ aws-data-pipeline/
        --profile your-profile-name) \
      --profile your-profile-name
    ```
-
-4. Check the database results:
+   
+5. Connect to the bastion host to access the database:
    ```bash
-   # Get the database password from Secrets Manager
-   aws secretsmanager get-secret-value --secret-id DATABASE_SECRET_NAME --query SecretString --output text --profile your-profile-name
+   # First, download your SSH key pair private key
+   aws ec2 create-key-pair --key-name bastion-key-pair --query 'KeyMaterial' --output text --profile your-profile-name > bastion-key.pem
+   chmod 400 bastion-key.pem
    
-   # Connect to the database
-   psql -h DB_ENDPOINT -U postgres -d datapipeline
-   # Enter the password when prompted
+   # Connect to the bastion host
+   ssh -i bastion-key.pem ec2-user@BASTION_PUBLIC_DNS
    
-   # Once connected, view the data
+   # Once connected to the bastion, use the pre-configured alias to connect to the database
+   connect-db
+   
+   # Or manually connect using the environment variables
+   psql -h $DB_ENDPOINT -U postgres -d datapipeline
+   
+   # Once connected to the database, check the data
    SELECT * FROM data LIMIT 10;
    ```
+
 
 ## Security Features
 
@@ -159,6 +173,8 @@ aws-data-pipeline/
 - Secrets Manager for database credentials
 - VPC isolated subnets for the database
 - Security groups with restrictive ingress/egress rules
+- Bastion host for secure database access
+- Key pairs for secure SSH access to the bastion host
 
 ## Testing
 

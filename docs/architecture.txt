@@ -1,10 +1,10 @@
 AWS Data Processing Pipeline Architecture
 
-┌─────────────┐     ┌───────────────────┐     ┌────────────────┐
-│             │     │                   │     │                │
-│  S3 Bucket  │────▶│  Lambda Function  │────▶│  RDS Postgres  │
-│             │     │                   │     │                │
-└─────────────┘     └───────────────────┘     └────────────────┘
+┌─────────────┐     ┌───────────────────────┐     ┌────────────────┐
+│             │     │                       │     │                │
+│  S3 Bucket  │────▶│  Containerized Lambda │────▶│  RDS Postgres  │
+│             │     │                       │     │                │
+└─────────────┘     └───────────────────────┘     └────────────────┘
        │                      │                       │
        │                      │                       │
        ▼                      ▼                       ▼
@@ -21,6 +21,15 @@ AWS Data Processing Pipeline Architecture
 │             IAM Roles and Security Groups                   │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
+       │
+       │
+       ▼
+┌─────────────┐
+│             │
+│  Bastion    │
+│   Host      │
+│             │
+└─────────────┘
 
 
 Components Description:
@@ -29,12 +38,14 @@ Components Description:
    - Stores input CSV files
    - Encrypted, versioned storage
    - Restricted access via IAM policies
+   - Triggers Lambda function on file uploads
 
-2. AWS Lambda Function:
-   - Runs serverless Python application
+2. Containerized AWS Lambda Function:
+   - Deployed as a Docker container with all dependencies
    - Automatically triggered by S3 events
    - Pulls data from S3, processes it, and writes to RDS
    - Runs in private subnet with NAT gateway access
+   - Includes pandas, numpy, and psycopg2 in the container
    - Scales automatically with no infrastructure management
 
 3. Amazon RDS PostgreSQL:
@@ -44,7 +55,7 @@ Components Description:
    - Credentials stored in AWS Secrets Manager
 
 4. Amazon VPC:
-   - Public subnet: NAT gateway, Internet Gateway
+   - Public subnet: NAT gateway, Internet Gateway, Bastion host
    - Private subnet: Lambda function
    - Isolated subnet: RDS PostgreSQL instance
 
@@ -54,10 +65,22 @@ Components Description:
    - S3 bucket policy blocking public access
    - Encryption in transit and at rest
 
+6. Bastion Host:
+   - EC2 instance in public subnet
+   - Provides secure access to the database
+   - Pre-configured with PostgreSQL client
+
 Data Flow:
 1. CSV files uploaded to S3 bucket
-2. Lambda function processes files:
+2. Containerized Lambda function processes files:
    - Reads from S3
    - Transforms data with Python/pandas
-   - Loads data to PostgreSQL
+   - Loads data to PostgreSQL using psycopg2
 3. Data stored securely in PostgreSQL for analytics and reporting
+4. Database can be accessed via the bastion host for administration
+
+Container Benefits:
+- All dependencies packaged in one container image
+- No need for separate Lambda layers
+- Consistent environment across deployments
+- Simplified dependency management

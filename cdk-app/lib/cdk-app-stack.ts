@@ -86,12 +86,12 @@ export class CdkAppStack extends cdk.Stack {
       ec2.Port.tcp(5432),
       'Allow Lambda function to connect to RDS'
     );
-
-    // Lambda function for data processing
-    const dataProcessorLambda = new lambda.Function(this, 'DataProcessorFunction', {
-      runtime: lambda.Runtime.PYTHON_3_9,
-      code: lambda.Code.fromAsset(path.join(__dirname, '../../app/src')),
-      handler: 'lambda_handler.handler',
+    
+    // Lambda function for data processing using Docker container approach
+    const dataProcessorLambda = new lambda.DockerImageFunction(this, 'DataProcessorFunction', {
+      code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, '../../app'), {
+        cmd: ['lambda_handler.handler'],
+      }),
       vpc,
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
@@ -140,6 +140,88 @@ export class CdkAppStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'LambdaFunctionName', {
       value: dataProcessorLambda.functionName,
       description: 'The name of the Lambda function for data processing',
+    });
+    
+    // Create a security group for the bastion host
+    const bastionSecurityGroup = new ec2.SecurityGroup(this, 'BastionSecurityGroup', {
+      vpc,
+      description: 'Security group for Bastion Host',
+      allowAllOutbound: true,
+    });
+    
+    // Allow SSH access to the bastion from anywhere (you might want to restrict this to your IP)
+    bastionSecurityGroup.addIngressRule(
+      ec2.Peer.anyIpv4(),
+      ec2.Port.tcp(22),
+      'Allow SSH access from anywhere (for demo purposes)'
+    );
+    
+    // Allow the bastion host to connect to the database
+    dbSecurityGroup.addIngressRule(
+      bastionSecurityGroup,
+      ec2.Port.tcp(5432),
+      'Allow Bastion Host to connect to RDS'
+    );
+    
+    // Get the latest Amazon Linux 2 AMI
+    const ami = new ec2.AmazonLinuxImage({
+      generation: ec2.AmazonLinuxGeneration.AMAZON_LINUX_2,
+      cpuType: ec2.AmazonLinuxCpuType.X86_64,
+    });
+    
+    // Create a key pair for SSH access
+    const keyPair = new ec2.CfnKeyPair(this, 'BastionKeyPair', {
+      keyName: 'bastion-key-pair',
+    });
+    
+    // Make sure the key pair is deleted when the stack is deleted
+    keyPair.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
+    
+    // User data script to install PostgreSQL client and set up the environment
+    const userData = ec2.UserData.forLinux();
+    userData.addCommands(
+      'yum update -y',
+      'amazon-linux-extras install postgresql14 -y',
+      'yum install -y jq',
+      'echo "export PGPASSWORD=\\$(aws secretsmanager get-secret-value --secret-id ' + dbInstance.secret!.secretName + ' --query SecretString --output text | jq -r \'.password\')" >> /home/ec2-user/.bashrc',
+      'echo "alias connect-db=\'psql -h ' + dbInstance.dbInstanceEndpointAddress + ' -U postgres -d datapipeline\'" >> /home/ec2-user/.bashrc',
+      'echo "AWS_SECRET_ID=' + dbInstance.secret!.secretName + '" >> /home/ec2-user/.env',
+      'echo "DB_ENDPOINT=' + dbInstance.dbInstanceEndpointAddress + '" >> /home/ec2-user/.env'
+    );
+    
+    // Create the EC2 instance for the bastion host
+    const bastionHost = new ec2.Instance(this, 'BastionHost', {
+      vpc,
+      instanceType: ec2.InstanceType.of(
+        ec2.InstanceClass.T2,
+        ec2.InstanceSize.MICRO  // t2.micro is free tier eligible
+      ),
+      machineImage: ami,
+      securityGroup: bastionSecurityGroup,
+      keyName: keyPair.keyName,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PUBLIC,
+      },
+      userData,
+    });
+    
+    // Grant the bastion host permissions to read the RDS secret
+    dbInstance.secret!.grantRead(bastionHost.role);
+    
+    // Output the bastion host's public DNS name and the key pair name
+    new cdk.CfnOutput(this, 'BastionPublicDNS', {
+      value: bastionHost.instancePublicDnsName,
+      description: 'The public DNS name of the bastion host',
+    });
+    
+    new cdk.CfnOutput(this, 'BastionKeyPairName', {
+      value: keyPair.keyName,
+      description: 'The name of the key pair for SSH access to the bastion host',
+    });
+    
+    new cdk.CfnOutput(this, 'BastionSSHCommand', {
+      value: `aws ec2-instance-connect send-ssh-public-key --instance-id ${bastionHost.instanceId} --availability-zone ${bastionHost.instanceAvailabilityZone} --instance-os-user ec2-user --ssh-public-key file://path/to/your/key.pub && ssh -i path/to/your/key ec2-user@${bastionHost.instancePublicDnsName}`,
+      description: 'Command to connect to the bastion host via SSH (replace path/to/your/key with your actual key path)',
     });
   }
 }
