@@ -87,8 +87,7 @@ aws-data-pipeline/
    ```bash
    npm run bootstrap
    # Or with a specific profile:
-   AWS_PROFILE=your-profile-name
-   npm run bootstrap
+   AWS_PROFILE=your-profile-name npm run bootstrap
    ```
 
 3. Build the project:
@@ -100,8 +99,7 @@ aws-data-pipeline/
    ```bash
    npm run deploy
    # Or with a specific profile:
-   AWS_PROFILE=your-profile-name
-   npm run deploy
+   AWS_PROFILE=your-profile-name npm run deploy
    ```
 
 ### Test the Pipeline
