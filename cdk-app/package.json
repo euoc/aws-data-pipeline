@@ -1,7 +1,7 @@
 {
   "name": "aws-data-pipeline",
   "version": "1.0.0",
-  "description": "AWS data processing pipeline with S3, ECS Fargate, and RDS PostgreSQL",
+  "description": "AWS data processing pipeline with S3, Lambda Container, and RDS PostgreSQL",
   "bin": {
     "cdk-app": "bin/cdk-app.js"
   },

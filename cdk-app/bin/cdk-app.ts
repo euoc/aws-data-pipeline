@@ -18,7 +18,7 @@ new CdkAppStack(app, 'DataPipelineStack', {
   terminationProtection: process.env.NODE_ENV === 'production',
 
   /* Add stack description */
-  description: 'Data processing pipeline with S3, ECS Fargate, and RDS PostgreSQL',
+  description: 'Data processing pipeline with S3, Lambda Container, and RDS PostgreSQL',
 
   /* Add tags for resource management */
   tags: {
