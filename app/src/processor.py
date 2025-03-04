@@ -112,29 +112,45 @@ def save_to_postgres(df, table_name, conn):
         if not natural_key_cols:
             create_table_query = f'CREATE TABLE IF NOT EXISTS {table_name} (record_id SERIAL PRIMARY KEY, {table_columns})'
         else:
-            create_table_query = f'CREATE TABLE IF NOT EXISTS {table_name} ({table_columns})'
+            # Create table with natural key as primary or unique constraint
+            primary_key_clause = ""
+            if len(natural_key_cols) == 1:
+                # For single column natural key, add primary key directly
+                primary_key_clause = f', PRIMARY KEY ("{natural_key_cols[0]}")'
             
-            # Add unique constraint for natural keys if they don't exist
-            for col in natural_key_cols:
-                # Check if constraint exists
-                check_constraint_query = f"""
-                SELECT constraint_name 
-                FROM information_schema.table_constraints 
-                WHERE table_name = '{table_name}' 
-                AND constraint_type = 'UNIQUE' 
-                AND constraint_name = '{table_name}_{col}_key'
-                """
-                cur.execute(check_constraint_query)
-                if not cur.fetchone():
-                    # Add unique constraint if it doesn't exist
-                    add_constraint_query = f'ALTER TABLE {table_name} ADD CONSTRAINT {table_name}_{col}_key UNIQUE ("{col}")'
-                    try:
-                        cur.execute(add_constraint_query)
-                    except Exception as e:
-                        logger.warning(f"Could not add unique constraint: {e}")
-                        # Continue anyway
+            create_table_query = f'CREATE TABLE IF NOT EXISTS {table_name} ({table_columns}{primary_key_clause})'
         
+        # Create the table first
         cur.execute(create_table_query)
+        conn.commit()  # Commit the table creation
+        
+        # Now check/add constraints if we're using multiple natural keys
+        # or if we need unique constraints instead of primary keys
+        if natural_key_cols and len(natural_key_cols) > 1:
+            # For multiple column natural keys, add composite unique constraint
+            constraint_name = f"{table_name}_unique_key"
+            
+            # Check if constraint exists
+            check_constraint_query = f"""
+            SELECT constraint_name 
+            FROM information_schema.table_constraints 
+            WHERE table_name = '{table_name}' 
+            AND constraint_type = 'UNIQUE' 
+            AND constraint_name = '{constraint_name}'
+            """
+            cur.execute(check_constraint_query)
+            
+            if not cur.fetchone():
+                # Create a composite unique constraint
+                columns_list = ', '.join([f'"{col}"' for col in natural_key_cols])
+                add_constraint_query = f'ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} UNIQUE ({columns_list})'
+                try:
+                    cur.execute(add_constraint_query)
+                    conn.commit()  # Commit constraint addition
+                except Exception as e:
+                    conn.rollback()  # Rollback if constraint add fails
+                    logger.warning(f"Could not add unique constraint: {e}")
+                    # Continue anyway - the table exists and we can still insert data
         
         # Insert data with ON CONFLICT handling
         for _, row in df.iterrows():
@@ -143,19 +159,29 @@ def save_to_postgres(df, table_name, conn):
             
             if natural_key_cols:
                 # Create the update part
+                # Create the update part (only include columns that exist in the dataframe)
                 update_set = ', '.join([f'"{col}" = EXCLUDED."{col}"' for col in df.columns 
                                       if col not in natural_key_cols])
                 
                 # Create the conflict target
                 conflict_cols = ', '.join([f'"{col}"' for col in natural_key_cols])
                 
-                # UPSERT query
-                insert_query = f'''
-                    INSERT INTO {table_name} ({columns})
-                    VALUES ({placeholders})
-                    ON CONFLICT ({conflict_cols}) DO UPDATE 
-                    SET {update_set}
-                '''
+                # Only add the UPDATE clause if there are non-key columns to update
+                if update_set:
+                    # UPSERT query with update
+                    insert_query = f'''
+                        INSERT INTO {table_name} ({columns})
+                        VALUES ({placeholders})
+                        ON CONFLICT ({conflict_cols}) DO UPDATE 
+                        SET {update_set}
+                    '''
+                else:
+                    # UPSERT query without update (just ignore conflicts)
+                    insert_query = f'''
+                        INSERT INTO {table_name} ({columns})
+                        VALUES ({placeholders})
+                        ON CONFLICT ({conflict_cols}) DO NOTHING
+                    '''
             else:
                 # Simple insert if no natural key
                 insert_query = f'INSERT INTO {table_name} ({columns}) VALUES ({placeholders})'
